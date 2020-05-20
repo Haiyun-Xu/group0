@@ -1,4 +1,4 @@
-CS 162 Group Repository
+This is Haiyun's personal repo for Berkeley CS162 class.
 =======================
 
 This repository contains code for CS 162 group projects.
