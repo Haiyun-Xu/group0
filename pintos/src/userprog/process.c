@@ -441,8 +441,18 @@ setup_stack (void **esp)
   if (kpage != NULL)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+      /*
+       * the %ESP value initialized here will be restored into the register as
+       * intr_exit() executes `ret`, and so it will become the starting value of
+       * the user stack pointer right after the context switch.
+       * 
+       * Since the user program will attempt to read the return address, argc,
+       * and argv, we should reserve room for those arguments on the stack,
+       * therefore setting the initial %ESP 20 bytes below PHYS_BASE. Why 20
+       * bytes? I'm not sure, but refer to ../../../report/project_basics.txt
+       */
       if (success)
-        *esp = PHYS_BASE;
+        *esp = PHYS_BASE - 20;
       else
         palloc_free_page (kpage);
     }
