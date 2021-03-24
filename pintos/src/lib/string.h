@@ -23,6 +23,7 @@ size_t strlen (const char *);
 size_t strlcpy (char *, const char *, size_t);
 size_t strlcat (char *, const char *, size_t);
 char *strtok_r (char *, const char *, char **);
+size_t strtok_c (const char *s, const char *delimiters);
 size_t strnlen (const char *, size_t);
 
 /* Try to be helpful. */

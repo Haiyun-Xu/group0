@@ -135,13 +135,13 @@ Section 2
     Note that the entry routine _start() is exactly the same as the one in do-nothing, so %ESP is decremented by 28 bytes before the `call` instruction. %ESP is decremented 4 bytes during the `call` instruction, but afterwards there's no change to %ESP. The do-stack-align test expects the stack pointer there to satisfy %ESP % 16 = 12.
 
     So here's the full picture: the stack pointer initialized by load() must satisfy the following relationship:
-    (%ESP - 28 -4) % 16 = 12
-       (%ESP - 32) % 16 = 12
-              %ESP % 16 = 12
-                   %ESP = N * 16 + 12
-          PHYS_BASE - X = N * 16 + 12
-              PHYS_BASE = N * 16 + 12 + X
-    where N is a random multiplier, and X is the amount that load() should subtract from PHYS_BASE to produce the initial value of %ESP. Since PHYS_BASE is a page address, it must be stack aligned as well, which means PHYS_BASE can be expressed as M * 16, giving us:
+    (%ESP - 28 - 4) % 16 = 12
+        (%ESP - 32) % 16 = 12
+               %ESP % 16 = 12
+                    %ESP = N * 16 + 12
+           PHYS_BASE - X = N * 16 + 12
+               PHYS_BASE = N * 16 + 12 + X
+    where N is a random multiplier, and X is the amount that load() should subtract from PHYS_BASE to produce the initial value of %ESP. Since PHYS_BASE is a page address, it must be stack aligned as well, which means PHYS_BASE can be expressed as Y * 16, giving us:
                  Y * 16 = N * 16 + 12 + X
                  (Y - N) * 16 = 12 + X
     which shows that 12 + X must be a multiple of 16 as well.
@@ -150,6 +150,21 @@ Section 2
     The next such X is 20, and it won't trigger a page fault in _start(), so it can be a solution.
 
     Note: I still didn't figure out why %ESP % 16 should be 12; in fact, since _start() decrements in multiple of 16 bytes, it should maintain the alignment/mis-alignment in the initial %ESP. If the initial %ESP were to be aligned, it should have a 0 remainder, not 12. It's also unlikely that the 20 Bytes subtracted from PHYS_BASE represents the "int argc" (4 bytes), "char *argv[]" (8 bytes), and "void *return_addr" (8 bytes), because the PINTOS OS only supports 32-bit address (e.g. sizeof(void *) returns 4, not 8). Unless the stack alignment we're talking about here needs to directly agree with the hardware architecture (64-bit machine, so 8 byte address) and not the OS, I don't see a reason why the initial subtraction has to be 20.
+
+    A: The important thing to notice is that:
+    1) "int argc", "char *argv[]", and the return address are 4 bytes each, and will take a total of 12 bytes;
+    2) the current version of PINTOS did not implement main() argument passing, so if we assume that everything else works the same, the current initial user ESP should sit 12 bytes above the ideal user ESP;
+    3) the ideal user ESP should also be aligned on 4-words, which is 16 bytes;
+
+    Combining these three points, we see that:
+        current ESP - 12 = ideal ESP
+        current ESP - 12 = N * 16
+             current ESP = N * 16 + 12
+        current ESP % 16 = 12
+    
+    Note that _start() shifts the initial ESP down by 28 bytes, then it calls main() which shifts the ESP down further by 4 bytes,
+    for a total of 32 bytes. So if the initial user ESP is aligned on 4-words, the ESP seen by main() will also be stack-aligned; vice-versa, if main() argument passing is not implemented, then the ESP seen by main() will also be mis-aligned.
+
 
 2.3.16
     Right before `int x30` software interrupt is executed, the %ESP points to 0x00000001 and 0x000000a2 at the top of the stack;

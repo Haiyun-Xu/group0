@@ -274,6 +274,48 @@ strtok_r (char *s, const char *delimiters, char **save_ptr)
   return token;
 }
 
+/* Returns the number of tokens in the string. */
+size_t strtok_c (const char *s, const char *delimiters)
+{
+  ASSERT (delimiters != NULL);
+  if (s == NULL)
+    return 0;
+  
+  int num = 0;
+  /* Skip any DELIMITERS at the start of s */
+  while (strchr (delimiters, *s) != NULL) {
+    /*
+     * strchr() will always return nonnull if we're searching for a null byte,
+     * because every string contains a null byte (at the end).
+     */
+    if (*s == '\0')
+      return num;
+    s++;
+  }
+
+  while (1) {
+    // at this point, s points at the start of a token
+
+    /* skip any non-DELIMITERS up to the end of the string */
+    while (strchr (delimiters, *s) == NULL)
+      s++;
+    
+    // at this point, s could either point to a delimiter or the null-char
+    num++;
+
+    /* Skip any DELIMITERS till the next token */
+    while (strchr (delimiters, *s) != NULL) {
+      /*
+       * strchr() will always return nonnull if we're searching for a null byte,
+       * because every string contains a null byte (at the end).
+       */
+      if (*s == '\0')
+        return num;
+      s++;
+    }
+  }
+}
+
 /* Sets the SIZE bytes in DST to VALUE. */
 void *
 memset (void *dst_, int value, size_t size)

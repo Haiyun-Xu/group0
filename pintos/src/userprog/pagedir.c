@@ -5,6 +5,8 @@
 #include "threads/init.h"
 #include "threads/pte.h"
 #include "threads/palloc.h"
+#include "threads/thread.h"
+#include "threads/vaddr.h"
 
 static uint32_t *active_pd (void);
 static void invalidate_pagedir (uint32_t *);
@@ -135,6 +137,24 @@ pagedir_get_page (uint32_t *pd, const void *uaddr)
   else
     return NULL;
 }
+
+/* Returns the kernel virtual address to which the given user virtual address
+   maps. Returns NULL if UADDR is unmapped. */
+void*
+utok (const void *uaddr) {
+  ASSERT(is_user_vaddr(uaddr));
+  return pagedir_get_page(thread_current()->pagedir, uaddr);
+}
+
+/* Returns the actual user virtual address that maps to the given kernel virtual
+   address KADDR. The given user virtual address UADDR is only used as an anchor,
+   and must be on the same page as the actual user virtual address. */
+void*
+ktou (const void *kaddr, const void *uaddr) {
+  ASSERT(is_kernel_vaddr(kaddr));
+  return ((char *) pg_round_down(uaddr)) + pg_ofs(kaddr);
+}
+
 
 /* Marks user virtual page UPAGE "not present" in page
    directory PD.  Later accesses to the page will fault.  Other

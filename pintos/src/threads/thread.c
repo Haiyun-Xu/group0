@@ -161,7 +161,23 @@ thread_print_stats (void)
 
    The code provided sets the new thread's `priority' member to
    PRIORITY, but no actual priority scheduling is implemented.
-   Priority scheduling is the goal of Problem 1-3. */
+   Priority scheduling is the goal of Problem 1-3.
+
+   When the function returns, the child kernel thread will have one kernel page,
+   with the following structure:
+   +==================================+
+   | kernel_thread_frame              |
+   |----------------------------------|
+   | switch_entry_frame               |
+   |----------------------------------|
+   | switch_threads_frame             |
+   |----------------------------------| <- initial kernel stack pointer
+   | ...                              |
+   | ...                              |
+   |----------------------------------|
+   | TCB (struct thread)              |
+   +==================================+
+  */
 tid_t
 thread_create (const char *name, int priority,
                thread_func *function, void *aux)
@@ -459,10 +475,13 @@ init_thread (struct thread *t, const char *name, int priority)
 
   memset (t, 0, sizeof *t);
   t->status = THREAD_BLOCKED;
-  strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+
+  int length = strcspn(name, " ");
+  length = length < THREAD_NAME_LENGTH ? length : THREAD_NAME_LENGTH;
+  strlcpy(t->name, name, length + 1);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);

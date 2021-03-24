@@ -34,14 +34,18 @@ process_execute (const char *file_name)
   tid_t tid;
 
   sema_init (&temporary, 0);
-  /* Make a copy of FILE_NAME.
-     Otherwise there's a race between the caller and load(). */
+  /* 
+   * Allocate a kernel page for the new process, and copy the file_name from the
+   * parent process's kernel memory into the child process's kernel memory;
+   * otherwise there's a race between the caller and load(). This kernel page
+   * is not put into the parent process page table.
+   */
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
-  /* Create a new thread to execute FILE_NAME. */
+  // Create a new kernel thread at default priority to execute FILE_NAME.
   tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy);
@@ -53,6 +57,12 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
+  /*
+   * We are now in the child process's kernel thread. The interrupt frame if_
+   * is on the child process kernel page (see thread.c:thread_create()), but
+   * file_name is in a temporary kernel page created by the parent process,
+   * so it must freed before the child process starts.
+   */
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
@@ -63,18 +73,26 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
-
-  /* If load failed, quit. */
+  
+  /*
+   * Free the temporary kernel page now that the program call arguments in
+   * file_name are copied into user memory
+   */
   palloc_free_page (file_name);
+
+  // If either load failed, quit.
   if (!success)
     thread_exit ();
 
-  /* Start the user process by simulating a return from an
-     interrupt, implemented by intr_exit (in
-     threads/intr-stubs.S).  Because intr_exit takes all of its
-     arguments on the stack in the form of a `struct intr_frame',
-     we just point the stack pointer (%esp) to our stack frame
-     and jump to it. */
+  /*
+   * Start the user process by simulating a return from an interrupt, which is
+   * implemented by intr_exit (in threads/intr-stubs.S). Note that intr_exit
+   * assumes that it follows an intr_entry (also in intr-stubs.S) and thus has
+   * the interrupt frame (containing the "interruped" user thread's register
+   * values) on the stack. We can therefore point the ESP register to if_ before
+   * jumping to intr_exit, and make it load the if_ values into the register as
+   * it context switches into user thread.
+   */
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED ();
 }
@@ -200,11 +218,13 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
+#define PROGRAM_NAME_MAX_LENGTH 64
 static bool setup_stack (void **esp);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
                           bool writable);
+static bool load_arguments(const char *argument, void **esp);
 
 /* Loads an ELF executable from FILE_NAME into the current thread.
    Stores the executable's entry point into *EIP
@@ -226,13 +246,20 @@ load (const char *file_name, void (**eip) (void), void **esp)
     goto done;
   process_activate ();
 
-  /* Open executable file. */
-  file = filesys_open (file_name);
-  if (file == NULL)
-    {
-      printf ("load: %s: open failed\n", file_name);
-      goto done;
-    }
+  /* Extract the program name and open executable file. */
+  char program_name[PROGRAM_NAME_MAX_LENGTH];
+  int program_name_length = strcspn(file_name, " ");
+  if (program_name_length >= PROGRAM_NAME_MAX_LENGTH) {
+    printf("load: %s: program name must be <= 63 characters\n", file_name);
+    goto done;
+  }
+  strlcpy(program_name, file_name, program_name_length + 1);
+
+  file = filesys_open (program_name);
+  if (file == NULL) {
+    printf ("load: %s: open failed\n", program_name);
+    goto done;
+  }
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -307,7 +334,21 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp))
+  if (!setup_stack(esp))
+    goto done;
+  
+  /*
+   * At this point, user pages are allocated, the program image is loaded into
+   * user memory, and the stack pointer is set to PHYS_BASE - 20, which is 12
+   * bytes above a 4-word aligned address.
+   * 
+   * We can now copy the program call arguments into user memory, and push the
+   * argv, argc, and return address onto the stack. Since the page directory
+   * has been activated and the allocated user page has been added to the page
+   * directory, user virtual memory can be directly referenced, and MMU will
+   * do the conversion to physical memory address.
+   */
+  if (!load_arguments(file_name, esp))
     goto done;
 
   /* Start address. */
@@ -321,8 +362,122 @@ load (const char *file_name, void (**eip) (void), void **esp)
   return success;
 }
 
-/* load() helpers. */
 
+/*
+ * Load the program arguments and main() arguments onto the user stack. Upon
+ * returning, the user stack will look like the following:
+ * 
+ * PHYS_BASE +==================================+
+ *           | inital offset (20 Bytes)         |
+ *           |----------------------------------|
+ *           | program arguments                |
+ *           |----------------------------------|
+ *           | argument token pointers          |
+ *           |----------------------------------|
+ *           | (offset to align the args below) |
+ *           |----------------------------------|
+ *           | char *argv []                    |
+ *           |----------------------------------|
+ *           | int argc                         |
+ *           |----------------------------------|
+ *           | return address (just NULL)       |
+ *           |----------------------------------| <= ESP, stack aligned (4-word aligned)
+ *           | ...                              |
+ * 1st page  +==================================+
+ */
+static bool load_arguments(const char *argument, void **esp) {
+  // edge cases, allow argument but not %esp to be NULL
+  if (argument == NULL)
+    return true;
+  else if (esp == NULL)
+    return false;
+  
+  // converts the user virtual address to kernel virtual address
+  struct thread *t = thread_current();
+  void *stack_pointer = utok(*esp);
+
+  /*
+   * shift the stack pointer to make room for the argument string.
+   * 
+   * putting an arbitrary limit on the length of the argument, because an exact
+   * calculation is complicated: if the length of the argument (including the
+   * null-char) is N, then there can be at most N/2 tokens in the argument, and
+   * therefore we would want:
+   *  USER_STACK_OFFSET_IN_BYTES + N + N/2 * sizeof(char*) + (4 * 3) <= PGSIZE,
+   * so as to avoid allocating another user page.
+   */
+  size_t max_argument_length = 1024;
+  size_t argument_length = 1 + strnlen(argument, max_argument_length);
+  if (argument_length == max_argument_length)
+    return false;
+  stack_pointer = (void *) ((char *) stack_pointer - argument_length);
+
+  // copy the argument string into user stack
+  strlcpy((char *) stack_pointer, argument, argument_length);
+  char *user_argument = (char *) stack_pointer;
+
+  /*
+   * since the stack_pointer is an address of char**, it is more than a byte and
+   * therefore must be alligned on words. Then, shift the stack_pointer to make
+   * room for the token pointers.
+   * 
+   * The token pointers aray must end will a NULL pointer, so we reserve room
+   * for it as well
+   */
+  size_t aligntment_offset = (((uint32_t) stack_pointer) % sizeof(void *));
+  stack_pointer = (void *) ((uint32_t) stack_pointer - aligntment_offset);
+  char *delimiters = " \t";
+  int argc = strtok_c(user_argument, delimiters);
+  stack_pointer = (void *) ((char **) stack_pointer - argc - 1);
+
+  /*
+   * push the token pointers onto the user stack, starting by pushing the first
+   * token pointer to the bottom of the reserved space.
+   * 
+   * NOTE: the kernel thread operates in kernel virtual memory, and so sees the
+   * token pointers as kernel virtual addresses as well. However, these addresses
+   * will be directly referenced by the user process, so they must be converted
+   * to user virtual addresses instead. Same rationale for converting argv into
+   * user virtual address.
+   */
+  char *state_tracker, *token_pointer;
+  token_pointer = strtok_r(user_argument, delimiters, &state_tracker);
+  *((char **) stack_pointer) = (char *) ktou(token_pointer, *esp);
+  for (
+    int index = 1;
+    (token_pointer = strtok_r(NULL, delimiters, &state_tracker)) != NULL && index <= argc;
+    index++
+  ) {
+    *(((char **) stack_pointer) + index) = (char *) ktou(token_pointer, *esp);
+  }
+  *((char **) stack_pointer + argc) = NULL;
+  char **argv = (char **) ktou(stack_pointer, *esp);
+
+  /*
+   * find the offset between stack_pointer and the closest stack-aligned address.
+   * If the offset is less than the minimum needed to store the main() arguments,
+   * add enough 4-words unit until it's large enough.
+   */
+  size_t alignment_offset = ((uint32_t) stack_pointer) % 16;
+  size_t minimum_offset = sizeof(char**) + sizeof(int) + sizeof(void*);
+  while (alignment_offset < minimum_offset)
+    alignment_offset += sizeof(void *) * 4;
+  stack_pointer = (void *) ((uint32_t) stack_pointer - alignment_offset);
+
+  // push the char *argv[], int argc, and return address onto the stack
+  *((char ***)((uint32_t) stack_pointer + sizeof(void*) + sizeof(int))) = argv;
+  *((int *)((uint32_t) stack_pointer + sizeof(void*))) = argc;
+  *((void **) stack_pointer) = NULL;
+
+  // update the ESP
+  int difference = (char*) pagedir_get_page(t->pagedir, *esp) - (char *) stack_pointer;
+  *esp = (void *) (*((char **) esp) - difference);
+  
+  return true;
+}
+
+/* load() helpers. */
+static int USER_STACK_OFFSET_IN_BYTES = 20;
 static bool install_page (void *upage, void *kpage, bool writable);
 
 /* Checks whether PHDR describes a valid, loadable segment in
@@ -442,17 +597,20 @@ setup_stack (void **esp)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       /*
-       * the %ESP value initialized here will be restored into the register as
-       * intr_exit() executes `ret`, and so it will become the starting value of
-       * the user stack pointer right after the context switch.
+       * the %esp value assigned here will be restored into the ESP register as
+       * intr-stubs.S:intr_exit executes the `ret` instruction, so it will be
+       * the initial user stack pointer right after the context switch.
        * 
-       * Since the user program will attempt to read the return address, argc,
-       * and argv, we should reserve room for those arguments on the stack,
-       * therefore setting the initial %ESP 20 bytes below PHYS_BASE. Why 20
-       * bytes? I'm not sure, but refer to ../../../report/project_basics.txt
+       * We need to reserve space for char *argv[], int argc, and the return
+       * address, as well as to ensure that the %esp pointing to the return
+       * address is stack-aligned (on 4-word). In addition, in case those
+       * arguments to main() aren't pushed onto the stack, we also need to
+       * prevent the user process from referencing kernel memory while trying
+       * to access them at %esp+8, %esp+4, and %esp. Therefore, an offset of 20
+       * bytes is pushed onto the stack.
        */
       if (success)
-        *esp = PHYS_BASE - 20;
+        *esp = PHYS_BASE - USER_STACK_OFFSET_IN_BYTES;
       else
         palloc_free_page (kpage);
     }
