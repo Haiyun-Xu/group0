@@ -61,6 +61,27 @@ palloc_init (size_t user_page_limit)
              user_pages, "user pool");
 }
 
+/*
+ * Checks whether a kernel virtual address is on an allocated page.
+ */
+bool
+is_kaddr_valid(void *kaddr) {
+  ASSERT(is_kernel_vaddr(kaddr));
+
+  // locks the kernel pool while we check the bit map
+  lock_acquire (&kernel_pool.lock);
+
+  /*
+   * convert kernel virtual address to page index, then check whether the page
+   * is currently in use.
+   */
+  size_t page_index = (((uint8_t *) pg_round_down(kaddr)) - kernel_pool.base) / PGSIZE;
+  bool in_use = bitmap_test(kernel_pool.used_map, page_index);
+  
+  lock_release (&kernel_pool.lock);
+  return in_use;
+}
+
 /* Obtains and returns a group of PAGE_CNT contiguous free pages.
    If PAL_USER is set, the pages are obtained from the user pool,
    otherwise from the kernel pool.  If PAL_ZERO is set in FLAGS,

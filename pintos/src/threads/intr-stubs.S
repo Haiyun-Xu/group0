@@ -5,8 +5,8 @@
 /* Main interrupt entry point.
 
    An internal or external interrupt starts in one of the
-   intrNN_stub routines, which push the `struct intr_frame'
-   frame_pointer, error_code, and vec_no members on the stack,
+   intrNN_stub routines, which push the frame_pointer,
+   error_code, and vec_no members onto the kernel stack,
    then jump here.
 
    We save the rest of the `struct intr_frame' members to the
@@ -32,8 +32,8 @@ intr_entry:
 	leal 56(%esp), %ebp	/* Set up frame pointer. */
 
 	/* Call interrupt handler. */
-	pushl %esp
-.globl intr_handler
+	pushl %esp              // %esp points to the intr_frame, pushing it onto
+.globl intr_handler             // the stack as an argument for intr_handler()
 	call intr_handler
 	addl $4, %esp
 .endfunc

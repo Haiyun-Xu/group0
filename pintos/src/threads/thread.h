@@ -83,7 +83,11 @@ typedef int tid_t;
    semaphore wait list (synch.c).  It can be used these two ways
    only because they are mutually exclusive: only a thread in the
    ready state is on the run queue, whereas only a thread in the
-   blocked state is on a semaphore wait list. */
+   blocked state is on a semaphore wait list.
+   
+   NOTE: when scheduled to run, the thread is simply popped off of
+   the ready list and changed to RUNNING status, without being appended
+   to a "running list". */
 struct thread
   {
     /* Owned by thread.c. */
@@ -99,6 +103,9 @@ struct thread
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
+    void *subprocess_status_page;       /* Kernel virtual address of the page storing subprocess status monitors. */
+    struct list subprocess_status_list; /* The list of subprocess status monitors. */
+    struct process_status *pstatus;     /* The process's status monitor in the parent process. */
     uint32_t *pagedir;                  /* Page directory. */
 #endif
 
@@ -127,7 +134,7 @@ struct thread *thread_current (void);
 tid_t thread_tid (void);
 const char *thread_name (void);
 
-void thread_exit (void) NO_RETURN;
+void thread_exit (int exit_status) NO_RETURN;
 void thread_yield (void);
 
 /* Performs some operation on thread t, given auxiliary data AUX. */

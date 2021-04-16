@@ -85,12 +85,18 @@ main (void)
   argv = read_command_line ();
   argv = parse_options (argv);
 
-  /* Initialize ourselves as a thread so we can use locks,
-     then enable console locking. */
+  /*
+   * Converts the currently executing physical thread into a Pintos thread.
+   * Once this function returns, the executing Pintos thread will have TCB and
+   * PCB, and can start calling thread_current(). However, before any new thread
+   * can be created with thread_create(), palloc_init() must be called to
+   * initialize the page allocator, and process_init() must be called to
+   * initialize the PCB.
+   */
   thread_init ();
-  console_init ();
 
-  /* Greet user. */
+  /* Initalizes console locking, then greet the user. */
+  console_init ();
   printf ("Pintos booting with %'"PRIu32" kB RAM...\n",
           init_ram_pages * PGSIZE / 1024);
 
@@ -99,10 +105,11 @@ main (void)
   malloc_init ();
   paging_init ();
 
-  /* Segmentation. */
 #ifdef USERPROG
+  /* Segmentation and process initialization. */
   tss_init ();
   gdt_init ();
+  process_init ();
 #endif
 
   /* Initialize interrupt handlers. */
@@ -134,7 +141,7 @@ main (void)
 
   /* Finish up. */
   shutdown ();
-  thread_exit ();
+  thread_exit (0);
 }
 
 /* Clear the "BSS", a segment that should be initialized to
