@@ -2,6 +2,7 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "userprog/descriptor.h"
 #include "userprog/pagedir.h"
 #include "userprog/process.h"
 #include "userprog/syscall.h"
@@ -17,8 +18,9 @@ syscall_init (void)
 /*
  * Check if the given pointer is a non-NULL address in the user virtual memory.
  * It checks the address of both the starting byte as well as the ending byte.
+ * If the pointer is invalid, the process is terminated.
  */
-static bool is_valid_pointer(const void *pointer, uint8_t size, bool check_writable) {
+static void check_valid_pointer(const void *pointer, unsigned size, bool check_writable) {
   /*
    * invalidate NULL pointers, pointers to kernel memory space, or data
    * structure that grows into the kernel memory space
@@ -26,9 +28,9 @@ static bool is_valid_pointer(const void *pointer, uint8_t size, bool check_writa
   if (
     pointer == NULL
     || !is_user_vaddr(pointer)
-    || size > (uint8_t *) PHYS_BASE - (uint8_t *) pointer
+    || size > (unsigned) ((uint8_t *) PHYS_BASE - (uint8_t *) pointer)
   )
-    return false;
+    thread_exit(-1);
   
   // find the starting and ending user page
   uint8_t *current_user_page = pg_round_down(pointer);
@@ -38,35 +40,46 @@ static bool is_valid_pointer(const void *pointer, uint8_t size, bool check_writa
   // check that each of the user page is allocated (and writable if asked)
   for (; current_user_page <= end_user_page; current_user_page += PGSIZE) {
     if (!is_user_page_present(t->pagedir, current_user_page, check_writable))
-      return false;
+     thread_exit(-1);
   }
-  return true;
 }
 
 /*
- * Check if the given string is valid.
+ * Check if the given string is valid. If the string is invalid, the process is
+ * terminated.
  */
-static bool is_valid_string(const char *pointer) {
+static void check_valid_string(const char **pointer) {
+  // check that the address of the string pointer is valid
   if (pointer == NULL)
-    return false;
+    thread_exit(-1);
+  check_valid_pointer((void *) pointer, sizeof(char *), false);
   
   /*
    * last_page must be different from current_page initially; use an address
    * that's not a page address to guarantee this difference
    */
+  const char *string = *pointer;
   uint8_t *last_page = (uint8_t *) 0x1;
-  uint8_t *current_page = pg_round_down(pointer);
+  uint8_t *current_page = pg_round_down(string);
 
   // check the address of each character, until the null-char is encountered
-  do {
-    if (last_page != current_page && !is_valid_pointer(pointer, sizeof(char), false))
-      return false;
+  while (true) {
+    if (last_page != current_page)
+      check_valid_pointer(string, sizeof(char), false);
     
+    // if the pointer was valid and points to a null-char, the entire string is valid
+    if (*string == '\0')
+      return;
+    
+    // otherwise, move onto the next character
     last_page = current_page;
-    current_page = pg_round_down(pointer + 1);
-  } while (*pointer++ != '\0');
+    current_page = pg_round_down(++string);
+  };
+}
 
-  return true;
+/* Project 1 task 2 */
+static int practice (int i) {
+  return ++i;
 }
 
 static void halt (void) {
@@ -85,8 +98,33 @@ static int wait (pid_t pid) {
   return process_wait(pid);
 }
 
-static int practice (int i) {
-  return i++;
+/* Project 1 task 3 */
+static bool create (const char *file, unsigned initial_size) {
+  return fd_create(file, initial_size);
+}
+static bool remove (const char *file) {
+  return fd_remove(file);
+}
+static int open (const char *file) {
+  return fd_open(file);
+}
+static int filesize (int fd) {
+  return fd_filesize(fd);
+}
+static int read (int fd, void *buffer, unsigned size) {
+  return fd_read(fd, buffer, size);
+}
+static int write (int fd, const void *buffer, unsigned size) {
+  return fd_write(fd, buffer, size);
+}
+static void seek (int fd, unsigned position) {
+  return fd_seek(fd, position);
+}
+static unsigned tell (int fd) {
+  return fd_tell(fd);
+}
+static void close (int fd) {
+  return fd_close(fd);
 }
 
 static void
@@ -108,42 +146,76 @@ syscall_handler (struct intr_frame *f)
    * and so args should be on a writable user page, but since we're only reading
    * it here, it doesn't matter
    */
-  if (!is_valid_pointer(args, sizeof(*args), false))
-    thread_exit(-1);
+  check_valid_pointer(args, sizeof(*args), false);
 
   /*
    * validate the rest of the arguments, then invoke the respective syscall based
    * on the syscall number.
    */
   switch (args[0]) {
-    case SYS_EXIT:
-      if (!is_valid_pointer(&args[1], sizeof(int), false))
-        thread_exit(-1);
-      exit(args[1]);
-      break; // not reached
-
+    case SYS_PRACTICE:
+      check_valid_pointer(&args[1], sizeof(int), false);
+      f->eax = (uint32_t) practice(*((int *)&args[1]));
+      break;
     case SYS_HALT:
       halt();
       break; // not reached
-
+    case SYS_EXIT:
+      check_valid_pointer(&args[1], sizeof(int), false);
+      exit(*((int *)&args[1]));
+      break; // not reached
     case SYS_EXEC:
-      if(!is_valid_string((char *) &args[1]))
-        thread_exit(-1);
-      f->eax = (uint32_t) exec((char *) args[1]);
+      check_valid_string((const char **) &args[1]);
+      f->eax = (uint32_t) exec(*((char **)&args[1]));
       break;
-
     case SYS_WAIT:
-      if (!is_valid_pointer(&args[1], sizeof(pid_t), false))
-        thread_exit(-1);
-      f->eax = (uint32_t) wait(args[1]);
+      check_valid_pointer(&args[1], sizeof(pid_t), false);
+      f->eax = (uint32_t) wait(*((pid_t *)&args[1]));
       break;
-
-    case SYS_PRACTICE:
-      if (!is_valid_pointer(&args[1], sizeof(int), false))
-        thread_exit(-1);
-      f->eax = (uint32_t) practice(args[1]);
+    case SYS_CREATE:
+      check_valid_string((const char**) &args[1]);
+      check_valid_pointer(&args[2], sizeof(unsigned), false);
+      f->eax = (uint32_t) create(*((char **)&args[1]), *((unsigned *)&args[2]));
       break;
-
+    case SYS_REMOVE:
+      check_valid_string((const char**) &args[1]);
+      f->eax = (uint32_t) remove(*((char **)&args[1]));
+      break;
+    case SYS_OPEN:
+      check_valid_string((const char**) &args[1]);
+      f->eax = (uint32_t) open(*((char **)&args[1]));
+      break;
+    case SYS_FILESIZE:
+      check_valid_pointer(&args[1], sizeof(int), false);
+      f->eax = (uint32_t) filesize(*((int *)&args[1]));
+      break;
+    case SYS_READ: // static int read (int fd, void *buffer, unsigned size)
+      check_valid_pointer(&args[1], sizeof(int), false);
+      check_valid_pointer(&args[2], sizeof(void *), false);
+      check_valid_pointer(&args[3], sizeof(unsigned), false);
+      check_valid_pointer(*((void **)&args[2]), *((unsigned *)&args[3]), true);
+      f->eax = (uint32_t) read(*((int *)&args[1]), *((void **)&args[2]), *((unsigned *)&args[3]));
+      break;
+    case SYS_WRITE: // write (int fd, const void *buffer, unsigned size)
+      check_valid_pointer(&args[1], sizeof(int), false);
+      check_valid_pointer(&args[2], sizeof(void *), false);
+      check_valid_pointer(&args[3], sizeof(unsigned), false);
+      check_valid_pointer(*((void **)&args[2]), *((unsigned *)&args[3]), false);
+      f->eax = (uint32_t) write(*((int *)&args[1]), *((const void **)&args[2]), *((unsigned *)&args[3]));
+      break;
+    case SYS_SEEK:
+      check_valid_pointer(&args[1], sizeof(int), false);
+      check_valid_pointer(&args[2], sizeof(unsigned), false);
+      seek(*((int *)&args[1]), *((unsigned *)&args[2]));
+      break;
+    case SYS_TELL:
+      check_valid_pointer(&args[1], sizeof(int), false);
+      f->eax = (uint32_t) tell(*((int *)&args[1]));
+      break;
+    case SYS_CLOSE:
+      check_valid_pointer(&args[1], sizeof(int), false);
+      close(*((int *)&args[1]));
+      break;
     default:
       thread_exit(-1);
       break; // not reached

@@ -23,6 +23,7 @@
 #include "threads/pte.h"
 #include "threads/thread.h"
 #ifdef USERPROG
+#include "userprog/descriptor.h"
 #include "userprog/process.h"
 #include "userprog/exception.h"
 #include "userprog/gdt.h"
@@ -110,6 +111,7 @@ main (void)
   tss_init ();
   gdt_init ();
   process_init ();
+  descriptor_init ();
 #endif
 
   /* Initialize interrupt handlers. */

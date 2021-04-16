@@ -5,12 +5,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "userprog/descriptor.h"
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
-#include "filesys/filesys.h"
 #include "threads/flags.h"
 #include "threads/init.h"
 #include "threads/interrupt.h"
@@ -19,7 +19,7 @@
 #include "threads/vaddr.h"
 
 static thread_func start_process NO_RETURN;
-struct lock process_exit_lock;
+static struct lock process_exit_lock;
 
 static bool setup_subprocess_list(void);
 static void parse_temporary_kpage(
@@ -157,8 +157,10 @@ start_process (void *temp_kpage)
   if_.eflags = FLAG_IF | FLAG_MBS;
 
   /*
-   * Setup the page and list of subprocess status monitors. If that's successful,
-   * load the program executables.
+   * Setup the page and list of subprocess status monitors, and the page of file
+   * structures. If those are successful, load the program executables. The file
+   * structures page must be setup before loading the executable, because the
+   * "struct file" of the process's own executable needs to be stored on the page.
    * 
    * Initialize the pstatus pointer to NULL, because if either the page setup or
    * the executable loading failed, the child process is considered a failure,
@@ -169,7 +171,7 @@ start_process (void *temp_kpage)
    * we confirm that the child user thread can execute.
    */
   bool successful = false;
-  if ((successful = setup_subprocess_list())) {
+  if (setup_subprocess_list() && setup_file_descriptors()) {
     successful = load(file_name, &if_.eip, &if_.esp);
   }
   t->pstatus = NULL;
@@ -278,6 +280,15 @@ process_exit (int exit_status)
   palloc_free_page(t->subprocess_status_page);
 
   lock_release(&process_exit_lock);
+
+  /*
+   * close all of the process's file descriptors and free the descriptor page,
+   * then close the process's executable to allow modifications.
+   */
+  close_all_file_descriptors();
+  palloc_free_page(t->file_descriptor_page);
+  close_process_executable();
+  t->process_executable = NULL;
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -502,10 +513,19 @@ load (const char *file_name, void (**eip) (void), void **esp)
   }
   strlcpy(program_name, file_name, program_name_length + 1);
 
-  file = filesys_open (program_name);
+  /*
+   * the process's own executable must be opened through this special function,
+   * which prohibits any process from writing to the executable, until this
+   * process exits.
+   * 
+   * The struct file of the executable should not be closable by the user program,and so should be stored in the PCB instead of in the process descriptors page.
+   */
+  file = open_process_executable(program_name);
   if (file == NULL) {
     printf ("load: %s: open failed\n", program_name);
     goto done;
+  } else {
+    t->process_executable = file;
   }
 
   /* Read and verify executable header. */
@@ -604,8 +624,11 @@ load (const char *file_name, void (**eip) (void), void **esp)
   success = true;
 
  done:
-  /* We arrive here whether the load is successful or not. */
-  file_close (file);
+  /*
+   * regardless if the load was successful, leave the file open, so that the
+   * executable is not modifiable. Either way, when the process exits (due to
+   * failure or normally), the executable will be closed.
+   */
   return success;
 }
 
@@ -655,7 +678,7 @@ static bool load_arguments(const char *argument, void **esp) {
    */
   size_t max_argument_length = 1024;
   size_t argument_length = 1 + strnlen(argument, max_argument_length);
-  if (argument_length == max_argument_length)
+  if (argument_length >= max_argument_length)
     return false;
   stack_pointer = (void *) ((char *) stack_pointer - argument_length);
 
@@ -704,12 +727,16 @@ static bool load_arguments(const char *argument, void **esp) {
    * find the offset between stack_pointer and the closest stack-aligned address.
    * If the offset is less than the minimum needed to store the main() arguments,
    * add enough 4-words unit until it's large enough.
+   * 
+   * For some reason, the entry stub moves the stack pointer down by 28 bytes,
+   * and expects the stack pointer to be stack-aligned afterwards. Therefore,
+   * our stack pointer must be 4 bytes below a stack-aligned address here.
    */
   size_t alignment_offset = ((uint32_t) stack_pointer) % 16;
   size_t minimum_offset = sizeof(char**) + sizeof(int) + sizeof(void*);
-  while (alignment_offset < minimum_offset)
-    alignment_offset += sizeof(void *) * 4;
-  stack_pointer = (void *) ((uint32_t) stack_pointer - alignment_offset);
+  while ((alignment_offset + 4) < minimum_offset)
+    alignment_offset += 16;
+  stack_pointer = (void *) ((uint32_t) stack_pointer - (alignment_offset + 4));
 
   // push the char *argv[], int argc, and return address onto the stack
   *((char ***)((uint32_t) stack_pointer + sizeof(void*) + sizeof(int))) = argv;
@@ -717,8 +744,8 @@ static bool load_arguments(const char *argument, void **esp) {
   *((void **) stack_pointer) = NULL;
 
   // update the ESP
-  int difference = (char*) pagedir_get_page(t->pagedir, *esp) - (char *) stack_pointer;
-  *esp = (void *) (*((char **) esp) - difference);
+  uint32_t difference = (char*) utok(t->pagedir, *esp) - (char *) stack_pointer;
+  *esp = (void *) ((uint32_t)(* esp) - difference);
   
   return true;
 }

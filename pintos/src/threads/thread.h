@@ -106,6 +106,8 @@ struct thread
     void *subprocess_status_page;       /* Kernel virtual address of the page storing subprocess status monitors. */
     struct list subprocess_status_list; /* The list of subprocess status monitors. */
     struct process_status *pstatus;     /* The process's status monitor in the parent process. */
+    void *file_descriptor_page;         /* The process's "struct descriptor" page. */
+    struct file *process_executable;    /* The process's executable file. */
     uint32_t *pagedir;                  /* Page directory. */
 #endif
 
