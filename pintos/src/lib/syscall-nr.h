@@ -5,6 +5,7 @@
 enum
   {
     /* Projects 1 and later. */
+    SYS_PRACTICE,               /* Returns arg incremented by 1 */
     SYS_HALT,                   /* Halt the operating system. */
     SYS_EXIT,                   /* Terminate this process. */
     SYS_EXEC,                   /* Start another process. */
@@ -18,7 +19,6 @@ enum
     SYS_SEEK,                   /* Change position in a file. */
     SYS_TELL,                   /* Report current position in a file. */
     SYS_CLOSE,                  /* Close a file. */
-    SYS_PRACTICE,               /* Returns arg incremented by 1 */
 
     /* Unused. */
     SYS_MMAP,                   /* Map a file into memory. */

@@ -161,7 +161,23 @@ thread_print_stats (void)
 
    The code provided sets the new thread's `priority' member to
    PRIORITY, but no actual priority scheduling is implemented.
-   Priority scheduling is the goal of Problem 1-3. */
+   Priority scheduling is the goal of Problem 1-3.
+
+   When the function returns, the child kernel thread will have one kernel page,
+   with the following structure:
+   +==================================+
+   | kernel_thread_frame              |
+   |----------------------------------|
+   | switch_entry_frame               |
+   |----------------------------------|
+   | switch_threads_frame             |
+   |----------------------------------| <- initial kernel stack pointer
+   | ...                              |
+   | ...                              |
+   |----------------------------------|
+   | TCB (struct thread)              |
+   +==================================+
+  */
 tid_t
 thread_create (const char *name, int priority,
                thread_func *function, void *aux)
@@ -278,20 +294,23 @@ thread_tid (void)
 /* Deschedules the current thread and destroys it.  Never
    returns to the caller. */
 void
-thread_exit (void)
+thread_exit (int exit_status)
 {
   ASSERT (!intr_context ());
 
 #ifdef USERPROG
-  process_exit ();
+  process_exit (exit_status);
 #endif
 
   /* Remove thread from all threads list, set our status to dying,
      and schedule another process.  That process will destroy us
      when it calls thread_schedule_tail(). */
   intr_disable ();
-  list_remove (&thread_current()->allelem);
-  thread_current ()->status = THREAD_DYING;
+
+  struct thread *t = thread_current();
+  printf("%s: exit(%d)\n", t->name, exit_status);
+  list_remove (&t->allelem); // maybe we don't need to remove the thread here, and instead let wait() remove it
+  t->status = THREAD_DYING;
   schedule ();
   NOT_REACHED ();
 }
@@ -422,7 +441,7 @@ kernel_thread (thread_func *function, void *aux)
 
   intr_enable ();       /* The scheduler runs with interrupts off. */
   function (aux);       /* Execute the thread function. */
-  thread_exit ();       /* If function() returns, kill the thread. */
+  thread_exit (0);      /* If function() returns, kill the thread. */
 }
 
 /* Returns the running thread. */
@@ -459,10 +478,14 @@ init_thread (struct thread *t, const char *name, int priority)
 
   memset (t, 0, sizeof *t);
   t->status = THREAD_BLOCKED;
-  strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+
+  // only use the first command token as the thread name
+  int length = strcspn(name, " ");
+  length = length < THREAD_NAME_LENGTH ? length : THREAD_NAME_LENGTH;
+  strlcpy(t->name, name, length + 1);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);

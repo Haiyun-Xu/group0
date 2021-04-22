@@ -5,6 +5,8 @@
 #include "threads/init.h"
 #include "threads/pte.h"
 #include "threads/palloc.h"
+#include "threads/thread.h"
+#include "threads/vaddr.h"
 
 static uint32_t *active_pd (void);
 static void invalidate_pagedir (uint32_t *);
@@ -134,6 +136,44 @@ pagedir_get_page (uint32_t *pd, const void *uaddr)
     return pte_get_page (*pte) + pg_ofs (uaddr);
   else
     return NULL;
+}
+
+/* Returns the kernel virtual address to which the given user virtual address
+   maps. Returns NULL if UADDR is unmapped. */
+void*
+utok (uint32_t *pd, const void *uaddr) {
+  ASSERT(pd != NULL);
+  ASSERT(is_user_vaddr(uaddr));
+  return pagedir_get_page(pd, uaddr);
+}
+
+/* Returns the actual user virtual address that maps to the given kernel virtual
+   address KADDR. The given user virtual address UADDR is only used as an anchor,
+   and must be on the same page as the actual user virtual address. */
+void*
+ktou (const void *kaddr, const void *uaddr) {
+  ASSERT(is_kernel_vaddr(kaddr));
+  return ((char *) pg_round_down(uaddr)) + pg_ofs(kaddr);
+}
+
+/* Returns whether the user page containing the given user virtual address has
+   already been allocated. Can also optionally check if the page is writable. */
+bool
+is_user_page_present(uint32_t *pd, const void *uaddr, bool check_writable) {
+  ASSERT(pd != NULL);
+  ASSERT(is_user_vaddr(uaddr));
+
+  uint32_t *pte = lookup_page(pd, uaddr, false);
+  if (pte != NULL && (*pte & PTE_P) != 0) {
+    if (check_writable) {
+      if ((*pte & PTE_W) != 0)
+        return true;
+      else
+        return false;
+    } else
+      return true;
+  } else
+    return false;
 }
 
 /* Marks user virtual page UPAGE "not present" in page
