@@ -1,9 +1,0 @@
-## Requirements:
-
-- the filesystem is not threadsafe, and so we must use a filesystem-global lock to prevent concurrent action;  
-- there are no "struct file" corresponding to stdin and stdout; the syscall simply checks the fd, calls input.h:input_getc() when it's a read from stdout, or calls stdio.h:putbuf() when it's a write to stdout;
-- each process should have its own independent set of file descriptors. Since the "struct file" data structures are stored in the kernel, they share the same address space. If (int fd) is simply casted to (struct file *), then
-  1. file descriptors across processes would collide in value, and a process won't be able to create as many file descriptors as it needs;  
-  2. the user would know the location of the kernel data structure, making it vulnerable;  
-- when a file opened by multiple processes is closed, the behavior follows the Unix semantics: when removed, the file's directory entry gets cleared, so no additional process can open it, but its file blocks continute to exist. Processes that have already opened the file can hence continue to read and write from it, and the file block isn't freed until all of its file descriptors are closed or the machines shuts down;  
-- no process should be able to modify a user process's executable as long as it's running. We know the file name of an executable when the process is being created, and the executable cannot be modified until its process exits; when a process exits, it closes all of its opened files, including its own executable, thereby allowing writes to it once again. Since file_deny_write() calls inode_deny_write(), which marks the inode as unwritable, as soon as a process calls file_deny_write(), no process can modify the executable - all processes operate on the same inode;  
