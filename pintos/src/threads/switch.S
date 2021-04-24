@@ -2,16 +2,16 @@
 
 #### struct thread *switch_threads (struct thread *cur, struct thread *next);
 ####
-#### Switches from CUR, which must be the running thread, to NEXT,
-#### which must also be running switch_threads(), returning CUR in
-#### NEXT's context.
+#### Switches from CUR, which must be the running thread, to NEXT, which could
+#### have been running switch_threads() or could be a new thread. The old thread's
+#### TCB is returned.
 ####
-#### This function works by assuming that the thread we're switching
-#### into is also running switch_threads().  Thus, all it has to do is
-#### preserve a few registers on the stack, then switch stacks and
-#### restore the registers.  As part of switching stacks we record the
-#### current stack pointer in CUR's thread structure.
-
+#### This function works by assuming that the thread we're switching into is
+#### also running switch_threads(). Thus, all it has to do is preserve a few
+#### registers on the stack, save the CUR thread's stack pointer on CUR's TCB,
+#### then load the NEXT thread's stack pointer from NEXT's TCB, and finally load
+#### the NEXT thread's registers from the stack. The program counter is not
+#### saved nor loaded.
 .globl switch_threads
 .func switch_threads
 switch_threads:

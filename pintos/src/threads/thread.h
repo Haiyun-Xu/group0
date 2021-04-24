@@ -97,6 +97,8 @@ struct thread
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
     struct list_elem allelem;           /* List element for all threads list. */
+    struct list_elem sleep_list_elem;   /* List element for sleeping threads list. */
+    int64_t awake_tick;                 /* The clock tick at which the thread should be awaken */
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
@@ -123,6 +125,7 @@ extern bool thread_mlfqs;
 void thread_init (void);
 void thread_start (void);
 
+void thread_sleep (void);
 void thread_tick (void);
 void thread_print_stats (void);
 

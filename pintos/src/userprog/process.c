@@ -306,6 +306,8 @@ process_exit (int exit_status)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
+  
+  printf("%s: exit(%d)\n", t->name, exit_status);
 }
 
 /* Sets up the CPU for running user code in the current
