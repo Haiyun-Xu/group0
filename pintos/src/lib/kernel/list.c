@@ -398,6 +398,18 @@ inplace_merge (struct list_elem *a0, struct list_elem *a1b0,
       }
 }
 
+/* The default implementation of list_less_func, where the third argument AUX
+   is an implementation of list_convert_func. */
+bool
+default_list_less_func (
+  const struct list_elem *a,
+  const struct list_elem *b,
+  void *aux
+) {
+  list_convert_func *converter = (list_convert_func *) aux;
+  return converter(a) < converter(b);
+}
+
 /* Sorts LIST according to LESS given auxiliary data AUX, using a
    natural iterative merge sort that runs in O(n lg n) time and
    O(1) space in the number of elements in LIST. */

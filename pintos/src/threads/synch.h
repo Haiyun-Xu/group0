@@ -4,6 +4,8 @@
 #include <list.h>
 #include <stdbool.h>
 
+void synch_init (void);
+
 /* A counting semaphore. */
 struct semaphore
   {
@@ -23,6 +25,17 @@ struct lock
     struct thread *holder;      /* Thread holding lock (for debugging). */
     struct semaphore semaphore; /* Binary semaphore controlling access. */
   };
+
+/* A thread's priority while holding a specific lock. */
+struct lock_priority
+{
+  bool in_use;
+  bool waiting;
+  void *lock;
+  int priority;
+  struct list_elem elem;
+  char padding[0];
+};
 
 void lock_init (struct lock *);
 void lock_acquire (struct lock *);

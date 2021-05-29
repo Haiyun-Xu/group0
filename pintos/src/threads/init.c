@@ -21,6 +21,7 @@
 #include "threads/malloc.h"
 #include "threads/palloc.h"
 #include "threads/pte.h"
+#include "threads/synch.h"
 #include "threads/thread.h"
 #ifdef USERPROG
 #include "userprog/descriptor.h"
@@ -137,6 +138,8 @@ main (void)
 #endif
 
   printf ("Boot complete.\n");
+  // the synchronization framework must be initialized after the booting is complete
+  synch_init ();
 
   /* Run actions specified on kernel command line. */
   run_actions (argv);

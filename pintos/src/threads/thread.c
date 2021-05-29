@@ -296,6 +296,10 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
+  // if the new thread has a higher priority, allow it to run first
+  if (priority > thread_get_priority())
+    thread_yield();
+
   return tid;
 }
 
@@ -428,11 +432,32 @@ thread_foreach (thread_action_func *func, void *aux)
     }
 }
 
-/* Sets the current thread's priority to NEW_PRIORITY. */
+/* Sets the current thread's original (and potentially the effective priority)
+   to NEW_PRIORITY. */
 void
 thread_set_priority (int new_priority)
 {
-  thread_current ()->priority = new_priority;
+  /*
+   * Calling thread_set_priority() is equivalent to changing the current thread's
+   * original priority. Regarding how this affects the current thread's effective
+   * priority:
+   * - if NEW_PRIORITY is higher, then it's used as the new effective priority,
+   * overriding any priority donated to the current thread;
+   * - if NEW_PRIORITY is lower:
+   *  - and if the current thread isn't holding any lock, then it is also used
+   *  as the new effective priority;
+   *  - and the current thread is holding locks, then the effective priority
+   *  isn't changed and is kept the same as the highest donated priority;
+   */
+  thread_current()->original_priority = new_priority;
+  int old_priority = thread_get_priority();
+
+  if (old_priority <= new_priority || list_empty(&thread_current()->lock_priority_list))
+    thread_current()->priority = new_priority;
+
+  // if the thread's effective priority was reduced, yield the CPU
+  if (old_priority > new_priority)
+    thread_yield();
 }
 
 /* Returns the current thread's priority. */
@@ -557,14 +582,19 @@ init_thread (struct thread *t, const char *name, int priority)
   memset (t, 0, sizeof *t);
   t->status = THREAD_BLOCKED;
   t->stack = (uint8_t *) t + PGSIZE;
+  t->original_priority = priority;
   t->priority = priority;
+  list_init(&t->lock_priority_list);
   t->magic = THREAD_MAGIC;
   t->awake_tick = 0;
 
+  int length = THREAD_NAME_LENGTH;
+#ifdef USERPROG
   // only use the first command token as the thread name
-  int length = strcspn(name, " ");
-  length = length < THREAD_NAME_LENGTH ? length : THREAD_NAME_LENGTH;
-  strlcpy(t->name, name, length + 1);
+  length = strcspn(name, " ");
+  length = length < THREAD_NAME_LENGTH ? 1 + length : THREAD_NAME_LENGTH;
+#endif
+  strlcpy(t->name, name, length);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
@@ -584,18 +614,25 @@ alloc_frame (struct thread *t, size_t size)
   return t->stack;
 }
 
-/* Chooses and returns the next thread to be scheduled.  Should
-   return a thread from the run queue, unless the run queue is
-   empty.  (If the running thread can continue running, then it
-   will be in the run queue.)  If the run queue is empty, return
-   idle_thread. */
+// Converts a (struct thread).elem to the thread's effective priority.
+int thread_priority_convert_func(const struct list_elem *e) {
+  return list_entry(e, struct thread, elem)->priority;
+}
+
+/* Chooses and returns the next thread to be scheduled. This function will select
+   the thread with the highest possible priority, but if no other meaningful
+   threads are available, the idle thread is returned.
+ */
 static struct thread *
 next_thread_to_run (void)
 {
   if (list_empty (&ready_list))
     return idle_thread;
-  else
-    return list_entry (list_pop_front (&ready_list), struct thread, elem);
+  else {
+    struct list_elem *next_elem = list_max(&ready_list, default_list_less_func, thread_priority_convert_func);
+    list_remove(next_elem);
+    return list_entry(next_elem, struct thread, elem);
+  }
 }
 
 /* Completes a thread switch by changing the executing thread's status to RUNNING,
@@ -644,14 +681,12 @@ thread_schedule_tail (struct thread *prev)
     }
 }
 
-/* Schedules a new thread and switches to it. If no other meaningful threads
-   are available, the idle thread is scheduled.
+/* Schedules a new thread and switches to it.
    
-   The caller must have changed the thread status from RUNNING and have disabled
-   interrupt, because schedule() will acquire the lock on the ready-queue, and
-   if an interrupt occurs then, the kernel will try to schedule another thread
-   after handling the interrupt, resulting in a deadlock.
-
+   The caller should have changed its own status from RUNNING (and placed itself
+   on the ready-list if yielding), and have disabled interrupt. This is because
+   schedule() will access the ready-list, and since the list library functions
+   are not thread-safe, the interrupt must be disabled to guarantee atomicity.
    If the scheduled thread has been executing, it will return from switch_thread(),
    and call thread_schedule_tail() to complete the second half of the scheduling.
 

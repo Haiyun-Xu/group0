@@ -166,6 +166,17 @@ typedef bool list_less_func (const struct list_elem *a,
                              const struct list_elem *b,
                              void *aux);
 
+/* Convert a list_elem to a comparable int value. */
+typedef int list_convert_func (const struct list_elem *e);
+
+/* The default implementation of list_less_func, where the third argument AUX
+   is an implementation of list_convert_func. */
+bool default_list_less_func (
+  const struct list_elem *a,
+  const struct list_elem *b,
+  void *aux
+);
+
 /* Operations on lists with ordered elements. */
 void list_sort (struct list *,
                 list_less_func *, void *aux);
