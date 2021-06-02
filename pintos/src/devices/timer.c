@@ -84,16 +84,30 @@ timer_elapsed (int64_t then)
   return timer_ticks () - then;
 }
 
-/* Sleeps for approximately TICKS timer ticks.  Interrupts must
-   be turned on. */
+/*
+ * Suspends execution of the calling thread until time has advanced by at least
+ * TICKS timer ticks. Unless the system is otherwise idle, the thread need not
+ * wake up immediately after TICKS timer ticks.
+ */
 void
 timer_sleep (int64_t ticks)
 {
-  int64_t start = timer_ticks ();
+  // edge cases
+  if (ticks <= 0)
+    return;
 
-  ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks)
-    thread_yield ();
+  /*
+   * disable interrupt so that this thread has exclusive access to the list of
+   * sleeping threads and can also be suspended safely.
+   */
+  enum intr_level prev_level = intr_disable();
+
+  // suspend the thread until at least TICKS timer ticks have passed
+  thread_current()->awake_tick = timer_ticks() + ticks;
+  thread_sleep();
+  
+  intr_set_level(prev_level);
+  return;
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -166,12 +180,14 @@ timer_print_stats (void)
   printf ("Timer: %"PRId64" ticks\n", timer_ticks ());
 }
 
-/* Timer interrupt handler. */
+/* Timer interrupt handler. Since the timer interrupt was an external interrupt,
+ * the caller should have disabled interrupt before invoking this function.
+ */
 static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
-  thread_tick ();
+  thread_tick();
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

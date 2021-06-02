@@ -206,8 +206,9 @@ intr_register_int (uint8_t vec_no, int dpl, enum intr_level level,
   register_handler (vec_no, dpl, level, handler, name);
 }
 
-/* Returns true during processing of an external interrupt
-   and false at all other times. */
+/* Returns true during handling of an external interrupt and false at all
+   other times. Indicates that the kernel is handling an external interrupt.
+ */
 bool
 intr_context (void)
 {
@@ -347,10 +348,11 @@ intr_handler (struct intr_frame *frame)
   bool external;
   intr_handler_func *handler;
 
-  /* External interrupts are special.
-     We only handle one at a time (so interrupts must be off)
-     and they need to be acknowledged on the PIC (see below).
-     An external interrupt handler cannot sleep. */
+  /* External interrupts are special. We only handle them one at a time, so
+     interrupts must be disabled and the kernel must not have been handling a
+     previous external interrupt. External interrupts need to be acknowledged
+     on the PIC (see below), and an external interrupt handler cannot sleep.
+   */
   external = frame->vec_no >= 0x20 && frame->vec_no < 0x30;
   if (external)
     {

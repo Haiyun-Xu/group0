@@ -22,7 +22,7 @@ struct thread *switch_threads (struct thread *cur, struct thread *next);
 /* Stack frame for switch_entry(). */
 struct switch_entry_frame
   {
-    void (*eip) (void);
+    void (*eip) (void); // return address
   };
 
 void switch_entry (void);
